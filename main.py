@@ -2,6 +2,7 @@ import PySimpleGUI as sg
 import sqlite3
 from random import randint
 from datetime import datetime
+import os
 
 con = None
 cur = None
@@ -14,22 +15,18 @@ config_res = None
 
 # SQLite userdata
 
-# def load_last_session_penalty(bad_penalty:int)->int:
-#     template = """SELECT SUM(correct) AS good, SUM(1-correct) AS bad FROM tries WHERE time>?;"""
-#     data = (datetime(datetime.now().year, datetime.now().month, datetime.now().day),)
-#     record = cur.execute(template, data).fetchone()
-#     streak = 0
-#     if (record[0] > 0):
-#         streak = record[0]
-#     print(streak)
-#     return streak
+def load_last_session_penalty() -> int:
+    template = """SELECT SUM(correct) AS good, SUM(1-correct) AS bad FROM tries WHERE time>?;"""
+    data = (datetime(datetime.now().year, datetime.now().month, datetime.now().day),)
+    record = cur.execute(template, data).fetchone()
+    return (record[0], record[1])
 
 
 def load_last_session_streak() -> int:
     template = """SELECT count(*) 
 FROM tries 
 WHERE correct = 1 
-AND time > (SELECT time FROM tries WHERE correct = 0 ORDER BY time DESC LIMIT 1) 
+AND time > coalesce((SELECT time FROM tries WHERE correct = 0 ORDER BY time DESC LIMIT 1) , 0)
 AND time > ?"""
 
     data = (datetime(datetime.now().year, datetime.now().month, datetime.now().day),)
@@ -90,12 +87,14 @@ def make_question(first_range: tuple[int, int] = (1, 20), second_range: tuple[in
 def make_quiz_window(target_trial_number):
     sg.theme('Black')
     sg.theme_button_color("white on black")
-    layout = [[sg.Text("Please wait", key="-TXT-"), sg.Input(size=(15, 1), key="-IN-", enable_events=True, focus=True)],
+    layout = [[sg.Text("Please wait", key="-TXT-"), sg.Text("", visible=False, key="-PREVIEW-"),
+               sg.Input(size=(15, 1), key="-IN-", enable_events=True, focus=True)],
               [sg.Push(), sg.ProgressBar(target_trial_number, orientation='h', size=(50, 20), key='-STREAK-'),
                sg.Push()],
-              [sg.Push(),
+              [sg.Button('< Prev', enable_events=True, key='PREV', mouseover_colors=("white", "black")), sg.Push(),
                sg.Button('Settings', enable_events=True, key='SETTINGS', mouseover_colors=("white", "black")),
-               sg.Push()]]
+               sg.Push(),
+               sg.Button('Next >', enable_events=True, key='NEXT', mouseover_colors=("white", "black"))]]
 
     window = sg.Window('Time to learn', layout, font=("Fira", 30), finalize=True)  # Part 3 - Window Defintion
     window['-IN-'].bind("<Return>", "_Enter")
@@ -113,7 +112,7 @@ def make_settings_window():
               [sg.Checkbox("", default=False, key="-RESET-", enable_events=True),
                sg.Text("Reset after mistake", key="-TXTRESET-")],
               [sg.Text("Please wait", key="-TXTPENALTY-"), sg.Input("", key="-PENALTY-", enable_events=True)],
-              [sg.Button("Done", key="DONE", enable_events=True)]]
+              [sg.Button("Done", key="DONE", mouseover_colors=("white", "black"), enable_events=True)]]
 
     window = sg.Window('Settings', layout, font=("Fira", 30), finalize=True, force_toplevel=True)
     window['-USER-'].bind("<Return>", "_Enter")
@@ -126,12 +125,14 @@ def make_settings_window():
 
 # Text filters
 def allow_only_number(window, values, key):
-    allow_no_space(window, values, key)
-    try:
-        value = int(values[key])
-    except:
-        window[key].update(values[key][:-1])
-    return int(value)
+    value = ""
+    for char in values[key]:
+        if (
+                char == "1" or char == "2" or char == "3" or char == "4" or char == "5" or char == "6" or char == "7" or char == "8" or char == "9" or char == "0"):
+            value += char
+    window[key].update(value)
+    if value:
+        return int(value)
 
 
 def allow_no_space(window, values, key):
@@ -144,7 +145,7 @@ def allow_no_space(window, values, key):
     return value
 
 
-def Init():
+def init():
     global config_con
     global config_cur
     global config_res
@@ -156,7 +157,12 @@ def Init():
         if (config_res.fetchone() is None):
             settings_main(True)
     except:
-        settings_main(True)
+        if (os.path.isfile("config.db")):
+            try:
+                config_res.execute("DROP TABLE settings")
+                settings_main(True)
+            except:
+                settings_main(True)
 
     config_res = config_cur.execute("SELECT username FROM settings")
     username = config_res.fetchone()[0]
@@ -175,18 +181,17 @@ def Init():
         except:
             cur.execute(
                 "CREATE TABLE tries(question TEXT, answer INTEGER, correct BOOL, thinking_time timestamp, time timestamp)")
-        streak = load_last_session_streak()
-        quiz_main(target_trial, streak)
+        quiz_main(target_trial)
 
 
 # Mains
-def settings_main(init: bool):
+def settings_main(is_init: bool):
     window = make_settings_window()
     window['-TXTTARGET-'].update("Target points")
     window['-TXTPENALTY-'].update("Point penalty")
     window['-TXTUSR-'].update("Username")
 
-    if (init == True):
+    if (is_init == True):
         config_cur.execute(
             "CREATE TABLE settings(username TEXT, target_trial INTEGER, reset_mistake BOOL, point_penalty INTEGER)")
 
@@ -197,9 +202,18 @@ def settings_main(init: bool):
         username, target_trial, reset_mistake, point_penalty = load_config()
 
         window['-TARGET-'].update(target_trial)
-        window['-PENALTY-'].update(point_penalty)
         window['-USER-'].update(username)
         window['-RESET-'].update(reset_mistake)
+        window['-PENALTY-'].update(point_penalty)
+        if reset_mistake:
+            window["-TXTPENALTY-"].update(visible=False)
+            window["-PENALTY-"].update(visible=False)
+        else:
+            window["-TXTPENALTY-"].update(visible=True)
+            window["-PENALTY-"].update(visible=True)
+        config_res.execute("DROP TABLE settings")
+        config_cur.execute(
+            "CREATE TABLE settings(username TEXT, target_trial INTEGER, reset_mistake BOOL, point_penalty INTEGER)")
 
     while True:
         event, values = window.read()
@@ -213,21 +227,41 @@ def settings_main(init: bool):
             allow_no_space(window, values, '-USER-')
         elif event == '-RESET-':
             if values['-RESET-']:
-                window["-PENALTY-"].update(visible=False)
                 window["-TXTPENALTY-"].update(visible=False)
+                window["-PENALTY-"].update(visible=False)
             else:
-                window["-PENALTY-"].update(visible=True)
                 window["-TXTPENALTY-"].update(visible=True)
+                window["-PENALTY-"].update(visible=True)
         elif (event == "-USER-" + "_Enter" or event == "-TARGET-" + "_Enter" or event == "DONE") and values[
             '-USER-'] and values['-TARGET-'] and ((not values['-RESET-'] and values['-PENALTY-']) or values['-RESET-']):
             save_config(values['-USER-'], values['-TARGET-'], values['-RESET-'], values['-PENALTY-'])
             break
 
     window.close()
+    if (is_init == False):
+        global con
+        con = None
+
+        global cur
+        cur = None
+
+        global res
+        res = None
+        init()
 
 
-def quiz_main(target_trial_number: int = 20, loaded_streak=0):
+def quiz_main(target_trial_number: int = 20):
     window = make_quiz_window(target_trial_number)
+    username, target_trial, reset_mistake, point_penalty = load_config()
+
+    if reset_mistake:
+        loaded_streak = load_last_session_streak()
+    else:
+        good, bad = load_last_session_penalty()
+        if good is not None and bad is not None:
+            loaded_streak = good - bad * point_penalty
+        else:
+            loaded_streak = 0
 
     question, correct_answer = make_question()
 
@@ -235,8 +269,13 @@ def quiz_main(target_trial_number: int = 20, loaded_streak=0):
     window['-IN-'].update("")
     window['-STREAK-'].update(loaded_streak)
 
-    last_ans = datetime.now()
+    last_ans_time = datetime.now()
     answer_streak = loaded_streak
+
+    last_question = None
+    last_ans = None
+    last_correct = None
+    act_ans = None
 
     if answer_streak >= target_trial_number:
         sg.popup(f"Your job is done for today, because you have answered correctly {answer_streak} times in a row")
@@ -248,15 +287,19 @@ def quiz_main(target_trial_number: int = 20, loaded_streak=0):
         if event == sg.WINDOW_CLOSED:
             break
         elif event == '-IN-' and values['-IN-']:
-            allow_only_number(window, values, "-IN-")
+            act_ans = allow_only_number(window, values, "-IN-")
         elif (event == "-IN-" + "_Enter" or event == "Submit") and values['-IN-']:
             value = allow_only_number(window, values, "-IN-")
 
-            think_time = datetime.now() - last_ans
-            last_ans = datetime.now()
+            think_time = datetime.now() - last_ans_time
+            last_ans_time = datetime.now()
 
             correct = value == correct_answer
-            if (correct):
+            last_question = question
+            last_ans = value
+            last_correct = correct
+            act_ans = None
+            if correct:
                 answer_streak += 1
 
                 window['-STREAK-'].update(answer_streak)
@@ -264,19 +307,36 @@ def quiz_main(target_trial_number: int = 20, loaded_streak=0):
                     sg.popup(f"Good job, you have answered correctly {answer_streak} times in a row")
                     break
             else:
-                answer_streak = 0
-                window['-STREAK-'].update(answer_streak)
+                if reset_mistake:
+                    answer_streak = 0
+                    window['-STREAK-'].update(answer_streak)
+                else:
+                    answer_streak -= point_penalty
+                    window['-STREAK-'].update(answer_streak)
 
             save_record(value, question, correct, think_time)
 
             question, correct_answer = make_question()
             window["-TXT-"].update(f"{question}=")
             window['-IN-'].update(value="")
+        elif event == 'PREV' and last_question:
+            window['-IN-'].update(visible=False)
+            window['-PREVIEW-'].update(last_ans, visible=True)
+            if last_correct:
+                window['-TXT-'].update(f"{last_question}=")
+            else:
+                window['-TXT-'].update(f"{last_question}≠")
+        elif event == 'NEXT' and not window['-IN-'].visible:
+            window['-IN-'].update(act_ans, visible=True)
+            window['-TXT-'].update(f"{question}=")
+            window['-PREVIEW-'].update(visible=False)
         elif event == 'SETTINGS':
+            window.close()
             settings_main(False)
+            break
 
     window.close()
 
 
 # Initialization
-Init()
+init()
