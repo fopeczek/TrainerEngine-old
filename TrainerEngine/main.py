@@ -6,13 +6,8 @@ from random import randint
 from datetime import datetime
 from collections import namedtuple
 
-con = None
-cur = None
-res = None
-
-config_con = None
-config_cur = None
-config_res = None
+config_version = "1.0.0"
+data_version = "1.0.0"
 
 
 # Utility
@@ -54,14 +49,15 @@ def allow_no_space(window, values, key):
 
 
 # SQLite userdata
-def load_last_session_penalty() -> tuple[Any, Any]:
+def load_last_session_penalty(con) -> tuple[Any, Any]:
     template = """SELECT SUM(correct) AS good, SUM(1-correct) AS bad FROM tries WHERE time>?;"""
     data = (datetime(datetime.now().year, datetime.now().month, datetime.now().day),)
+    cur = con.cursor()
     record = cur.execute(template, data).fetchone()
     return record[0], record[1]
 
 
-def load_last_session_streak() -> int:
+def load_last_session_streak(con) -> int:
     template = """SELECT count(*) 
     FROM tries 
     WHERE correct = 1 
@@ -69,6 +65,7 @@ def load_last_session_streak() -> int:
     AND time > ?"""
 
     data = (datetime(datetime.now().year, datetime.now().month, datetime.now().day),)
+    cur = con.cursor()
     record = cur.execute(template, data).fetchone()
     streak = 0
     if (record[0] > 0):
@@ -77,10 +74,11 @@ def load_last_session_streak() -> int:
     return streak
 
 
-def save_record(value: int, question: str, correct: bool, think_time):
+def save_record(value: int, question: str, correct: bool, think_time, con):
     template = """INSERT INTO 'tries' ('question', 'answer', 'correct', 'thinking_time', 'time') VALUES (?, ?, ?, ?, ?);"""
 
     data = (question, value, correct, str(think_time).split(".")[0], datetime.now())
+    cur = con.cursor()
     cur.execute(template, data)
     con.commit()
 
@@ -121,7 +119,7 @@ def make_settings_table():
         "min1 INTEGER, max1 INTEGER, min2 INTEGER, max2 INTEGER, do_neg BOOL)")
 
 
-def save_config(username: str, target_trial: int, reset_mistake: bool, point_penalty: int,min1: int, max1: int,
+def save_config(username: str, target_trial: int, reset_mistake: bool, point_penalty: int, min1: int, max1: int,
                 min2: int, max2: int, do_neg: bool):
     template = """INSERT INTO 'settings' ('username', 'target_trial', 'reset_mistake', 'point_penalty', 'min1', 
     'max1', 'min2', 'max2', 'do_neg') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?); """
@@ -199,17 +197,30 @@ def make_settings_window():
     window.Element('-USER-').SetFocus()
     return window
 
-
-# Text filters
-
+def check_version(config_con):
+    config_cur = config_con.cursor()
+    try:
+        loaded_config_version = config_cur.execute("SELECT config_version FROM versions").fetchone()[0]
+        if loaded_config_version != config_version:
+            assert "Please remove old configuration file, version missmatch!"
+        loaded_data_version = config_cur.execute("SELECT data_version FROM versions").fetchone()[0]
+        if loaded_data_version != data_version:
+            assert "Please remove old database file, version missmatch!"
+    except:
+        config_cur.execute("CREATE TABLE versions(config_version INTEGER, data_version INTEGER)")
+        template = """INSERT INTO 'versions' ('config_version', 'data_version') VALUES (?, ?);"""
+        data = (config_version, data_version)
+        config_cur.execute(template, data)
+        config_con.commit()
 
 def init():
     global config_con
     global config_cur
     global config_res
-    if config_con is None:
-        config_con = sqlite3.connect("config.db")
+    config_con = sqlite3.connect("config.db")
     config_cur = config_con.cursor()
+
+    check_version(config_con)
 
     try:
         config_res = config_cur.execute("SELECT username FROM settings")
@@ -220,7 +231,7 @@ def init():
         try:
             config_res.execute("DROP TABLE settings")
         except:
-            config_res  # Ignore
+            config_cur  # Ignore
         settings_main(True)
 
     config_res = config_cur.execute("SELECT username FROM settings")
@@ -229,18 +240,14 @@ def init():
     target_trial = config_res.fetchone()[0]
 
     if username != "" and target_trial is not None:
-        global con
-        global cur
-        global res
-        if con is None:
-            con = sqlite3.connect(f"{username}.db")
+        con = sqlite3.connect(f"{username}.db")
         cur = con.cursor()
         try:
-            res = cur.execute("SELECT question FROM tries")
+            cur.execute("SELECT question FROM tries")
         except:
             cur.execute(
                 "CREATE TABLE tries(question TEXT, answer INTEGER, correct BOOL, thinking_time timestamp, time timestamp)")
-        quiz_main(target_trial)
+        quiz_main(target_trial, con)
 
 
 # Mains
@@ -348,14 +355,14 @@ def settings_main(is_init: bool):
         init()
 
 
-def quiz_main(target_trial_number):
+def quiz_main(target_trial_number, con):
     window = make_quiz_window(target_trial_number)
     loaded_config = load_config()
 
     if loaded_config.reset_mistake:
-        loaded_streak = load_last_session_streak()
+        loaded_streak = load_last_session_streak(con)
     else:
-        good, bad = load_last_session_penalty()
+        good, bad = load_last_session_penalty(con)
         if good is not None and bad is not None:
             loaded_streak = good - bad * loaded_config.point_penalty
         else:
@@ -415,7 +422,7 @@ def quiz_main(target_trial_number):
                         answer_streak = 0
                     window['-STREAK-'].update(answer_streak)
 
-            save_record(value, question, correct, think_time)
+            save_record(value, question, correct, think_time, con)
 
             question, correct_answer = make_question((loaded_config.min1, loaded_config.max1),
                                                      (loaded_config.min2, loaded_config.max2), loaded_config.do_neg)
@@ -440,3 +447,5 @@ def quiz_main(target_trial_number):
 
     window.close()
 
+
+init()
