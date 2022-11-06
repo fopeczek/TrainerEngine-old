@@ -440,6 +440,3 @@ def quiz_main(target_trial_number):
 
     window.close()
 
-
-# Initialization
-init()

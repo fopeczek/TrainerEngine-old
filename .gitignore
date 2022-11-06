@@ -1,3 +1,6 @@
-venv
 *.db
 .idea
+*.egg-info
+venv*
+build
+__pycache__
