@@ -1,5 +1,3 @@
-from typing import Tuple, Any
-
 import PySimpleGUI as sg
 import sqlite3
 from random import randint
@@ -7,16 +5,18 @@ from datetime import datetime
 from collections import namedtuple
 
 config_version = "1.0.0"
-data_version = "1.0.0"
+data_version = "2.0.0"
+
+admin_mode = False
 
 
 # Utility
 
-def clamp(min, max, value):
-    if value > max:
-        return max
-    if value < min:
-        return min
+def clamp(mini, maxi, value):
+    if value > maxi:
+        return maxi
+    if value < mini:
+        return mini
     return value
 
 
@@ -49,84 +49,122 @@ def allow_no_space(window, values, key):
 
 
 # SQLite userdata
-def load_last_session_penalty(con) -> tuple[Any, Any]:
-    template = """SELECT SUM(correct) AS good, SUM(1-correct) AS bad FROM tries WHERE time>?;"""
+def load_last_session(con) -> tuple[int, int]:
+    template = """SELECT points FROM tries WHERE time>? ORDER BY time DESC LIMIT 1;"""
     data = (datetime(datetime.now().year, datetime.now().month, datetime.now().day),)
     cur = con.cursor()
-    record = cur.execute(template, data).fetchone()
-    return record[0], record[1]
+    points = cur.execute(template, data).fetchone()
+    if points is not None:
+        points = points[0]
 
-
-def load_last_session_streak(con) -> int:
-    template = """SELECT count(*) 
-    FROM tries 
-    WHERE correct = 1 
-    AND time > coalesce((SELECT time FROM tries WHERE correct = 0 ORDER BY time DESC LIMIT 1) , 0)
-    AND time > ?"""
-
+    template = """SELECT COUNT(*) AS amount FROM tries WHERE time>?;"""
     data = (datetime(datetime.now().year, datetime.now().month, datetime.now().day),)
     cur = con.cursor()
-    record = cur.execute(template, data).fetchone()
-    streak = 0
-    if (record[0] > 0):
-        streak = record[0]
-    print(streak)
-    return streak
+    index = cur.execute(template, data).fetchone()[0]
+    return points, index
 
 
-def save_record(value: int, question: str, correct: bool, think_time, con):
-    template = """INSERT INTO 'tries' ('question', 'answer', 'correct', 'thinking_time', 'time') VALUES (?, ?, ?, ?, ?);"""
+def save_record(value: int, question: str, correct: bool, points: int, think_time, con):
+    template = """INSERT INTO 'tries' ('question', 'answer', 'correct', 'points', 'thinking_time', 'time') VALUES (?, ?, ?, ?, ?, ?);"""
 
-    data = (question, value, correct, str(think_time).split(".")[0], datetime.now())
+    data = (question, value, correct, points, str(think_time).split(".")[0], datetime.now())
     cur = con.cursor()
     cur.execute(template, data)
     con.commit()
 
 
+def load_record(con, index: int) -> tuple[str, bool, str, int]:  # question, correction, answertion, pointion
+    template = """SELECT question, correct, answer, points FROM tries WHERE time>? ORDER BY time ASC LIMIT ?;"""
+
+    data = (datetime(datetime.now().year, datetime.now().month, datetime.now().day), index + 1)
+    cur = con.cursor()
+    out = cur.execute(template, data).fetchall()
+    if out is not None:
+        out = out[index]
+    return out
+
+
+def save_config(username: str, target_trial: int, reset_mistake: bool, point_penalty: int, min1: int, max1: int,
+                min2: int, max2: int, do_neg: bool, con):
+    cur = con.cursor()
+    template = """INSERT INTO 'settings' ('username', 'target_trial', 'reset_mistake', 'point_penalty', 'min1', 
+    'max1', 'min2', 'max2', 'do_neg') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?); """
+
+    data = (username, target_trial, reset_mistake, point_penalty, min1, max1, min2, max2, do_neg)
+    cur.execute(template, data)
+    con.commit()
+
+
 # SQLite config
-def load_config():
-    config_res = config_cur.execute("SELECT username FROM settings")
-    username = config_res.fetchone()[0]
-    config_res = config_cur.execute("SELECT target_trial FROM settings")
-    target_trial = config_res.fetchone()[0]
-    config_res = config_cur.execute("SELECT point_penalty FROM settings")
-    point_penalty = config_res.fetchone()[0]
-    config_res = config_cur.execute("SELECT reset_mistake FROM settings")
-    reset_mistake = config_res.fetchone()[0]
+def load_config(con):
+    cur = con.cursor()
+    res = cur.execute("SELECT username FROM settings")
+    username = res.fetchone()[0]
+    res = cur.execute("SELECT target_trial FROM settings")
+    target_trial = res.fetchone()[0]
+    res = cur.execute("SELECT point_penalty FROM settings")
+    point_penalty = res.fetchone()[0]
+    res = cur.execute("SELECT reset_mistake FROM settings")
+    reset_mistake = res.fetchone()[0]
 
-    config_res = config_cur.execute("SELECT min1 FROM settings")
-    min1 = config_res.fetchone()[0]
+    res = cur.execute("SELECT min1 FROM settings")
+    min1 = res.fetchone()[0]
 
-    config_res = config_cur.execute("SELECT max1 FROM settings")
-    max1 = config_res.fetchone()[0]
+    res = cur.execute("SELECT max1 FROM settings")
+    max1 = res.fetchone()[0]
 
-    config_res = config_cur.execute("SELECT min2 FROM settings")
-    min2 = config_res.fetchone()[0]
+    res = cur.execute("SELECT min2 FROM settings")
+    min2 = res.fetchone()[0]
 
-    config_res = config_cur.execute("SELECT max2 FROM settings")
-    max2 = config_res.fetchone()[0]
+    res = cur.execute("SELECT max2 FROM settings")
+    max2 = res.fetchone()[0]
 
-    config_res = config_cur.execute("SELECT do_neg FROM settings")
-    do_neg = config_res.fetchone()[0]
+    res = cur.execute("SELECT do_neg FROM settings")
+    do_neg = res.fetchone()[0]
 
     template = namedtuple('template', 'username target_trial reset_mistake point_penalty min1 max1 min2 max2 do_neg')
     return template(username, target_trial, reset_mistake, point_penalty, min1, max1, min2, max2, do_neg)
 
 
-def make_settings_table():
-    config_cur.execute(
+def clear_settings(con):
+    cur = con.cursor()
+    cur.execute("DROP TABLE settings")
+    con.commit()
+    make_settings_table(con)
+
+
+def make_settings_table(con):
+    cur = con.cursor()
+    cur.execute(
         "CREATE TABLE settings(username TEXT, target_trial INTEGER, reset_mistake BOOL, point_penalty INTEGER, "
         "min1 INTEGER, max1 INTEGER, min2 INTEGER, max2 INTEGER, do_neg BOOL)")
+    con.commit()
 
 
-def save_config(username: str, target_trial: int, reset_mistake: bool, point_penalty: int, min1: int, max1: int,
-                min2: int, max2: int, do_neg: bool):
-    template = """INSERT INTO 'settings' ('username', 'target_trial', 'reset_mistake', 'point_penalty', 'min1', 
-    'max1', 'min2', 'max2', 'do_neg') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?); """
+def make_data_table(con):
+    cur = con.cursor()
+    cur.execute(
+        "CREATE TABLE tries(question TEXT, answer INTEGER, correct BOOL, points INTEGER, thinking_time timestamp, time timestamp)")
+    con.commit()
 
-    data = (username, target_trial, reset_mistake, point_penalty, min1, max1, min2, max2, do_neg)
-    config_cur.execute(template, data)
-    config_con.commit()
+
+def clear_versions_table(con, config):
+    cur = con.cursor()
+    cur.execute("DROP TABLE versions")
+    con.commit()
+    make_versions_table(con, config)
+
+
+def make_versions_table(con, config):
+    cur = con.cursor()
+    cur.execute("CREATE TABLE versions(version INTEGER)")
+    template = """INSERT INTO 'versions' ('version') VALUES (?);"""
+    if config:
+        data = (config_version,)
+    else:
+        data = (data_version,)
+    cur.execute(template, data)
+    con.commit()
 
 
 # Questioning
@@ -154,7 +192,7 @@ def make_quiz_window(target_trial_number):
               [sg.Push(), sg.ProgressBar(target_trial_number, orientation='h', size=(50, 20), key='-STREAK-'),
                sg.Push()],
               [sg.Button('< Prev', enable_events=True, key='PREV', mouseover_colors=("white", "black")), sg.Push(),
-               sg.Button('Settings', enable_events=True, key='SETTINGS', mouseover_colors=("white", "black")),
+               sg.Button('Settings', visible=admin_mode, enable_events=True, key='SETTINGS', mouseover_colors=("white", "black")),
                sg.Push(),
                sg.Button('Next >', enable_events=True, key='NEXT', mouseover_colors=("white", "black"))]]
 
@@ -175,12 +213,12 @@ def make_settings_window():
               [sg.Checkbox("", default=False, key="-RESET-", enable_events=True),
                sg.Text("Reset after mistake", key="-TXTRESET-")],
               [sg.Text("Please wait", key="-TXTPENALTY-"), sg.Input("", key="-PENALTY-", enable_events=True)],
-              [sg.Text("Please wait", key="-TXTNUM1-"), sg.Text("Please wait", key="-TXTMAX1-"),
-               sg.Input("", key="-MAX1-", size=(15, 1), enable_events=True),
-               sg.Text("Please wait", key="-TXTMIN1-"), sg.Input("", key="-MIN1-", size=(15, 1), enable_events=True)],
-              [sg.Text("Please wait", key="-TXTNUM2-"), sg.Text("Please wait", key="-TXTMAX2-"),
-               sg.Input("", key="-MAX2-", size=(15, 1), enable_events=True),
-               sg.Text("Please wait", key="-TXTMIN2-"), sg.Input("", key="-MIN2-", size=(15, 1), enable_events=True)],
+              [sg.Text("Please wait", key="-TXTNUM1-"), sg.Text("Please wait", key="-TXTMIN1-"),
+               sg.Input("", key="-MIN1-", size=(15, 1), enable_events=True),
+               sg.Text("Please wait", key="-TXTMAX1-"), sg.Input("", key="-MAX1-", size=(15, 1), enable_events=True)],
+              [sg.Text("Please wait", key="-TXTNUM2-"), sg.Text("Please wait", key="-TXTMIN2-"),
+               sg.Input("", key="-MIN2-", size=(15, 1), enable_events=True),
+               sg.Text("Please wait", key="-TXTMAX2-"), sg.Input("", key="-MAX2-", size=(15, 1), enable_events=True)],
               [sg.Checkbox("", default=True, key="-NEG-", enable_events=True),
                sg.Text("Do negation?", key="-TXTNEG-")],
               [sg.Button("Done", key="DONE", mouseover_colors=("white", "black"), enable_events=True)]]
@@ -197,42 +235,49 @@ def make_settings_window():
     window.Element('-USER-').SetFocus()
     return window
 
-def check_version(config_con):
-    config_cur = config_con.cursor()
+
+def check_version(con, config: bool):
+    cur = con.cursor()
+    global config_version
+    global data_version
     try:
-        loaded_config_version = config_cur.execute("SELECT config_version FROM versions").fetchone()[0]
-        if loaded_config_version != config_version:
-            assert "Please remove old configuration file, version missmatch!"
-        loaded_data_version = config_cur.execute("SELECT data_version FROM versions").fetchone()[0]
-        if loaded_data_version != data_version:
-            assert "Please remove old database file, version missmatch!"
+        tmp = cur.execute("SELECT * FROM versions").fetchone()
     except:
-        config_cur.execute("CREATE TABLE versions(config_version INTEGER, data_version INTEGER)")
-        template = """INSERT INTO 'versions' ('config_version', 'data_version') VALUES (?, ?);"""
-        data = (config_version, data_version)
-        config_cur.execute(template, data)
-        config_con.commit()
+        make_versions_table(con, config)
+    try:
+        loaded_version = cur.execute("SELECT version FROM versions").fetchone()[0]
+    except:
+        clear_versions_table(con, config)
+    loaded_version = cur.execute("SELECT version FROM versions").fetchone()[0]
+    if config:
+        if loaded_version != config_version:
+            raise Exception("Error: version missmatch! Remove your configuration file")
+    else:
+        if loaded_version != data_version:
+            raise Exception("Error: version missmatch! Remove your user data file")
+
 
 def init():
-    global config_con
-    global config_cur
-    global config_res
     config_con = sqlite3.connect("config.db")
     config_cur = config_con.cursor()
 
-    check_version(config_con)
+    check_version(config_con, True)
+
+    try:
+        config_res = config_cur.execute("SELECT * FROM settings")
+    except:
+        make_settings_table(config_con)
+        settings_main(True, config_con)
 
     try:
         config_res = config_cur.execute("SELECT username FROM settings")
-        if (config_res.fetchone()[0] is None):
-            config_res.execute("DROP TABLE settings")
-            settings_main(True)
+        username = config_res.fetchone()[0]
+        if username is None:
+            clear_settings(config_con)
+            settings_main(True, config_con)
     except:
-        try:
-            config_res.execute("DROP TABLE settings")
-        except:
-            config_cur  # Ignore
-        settings_main(True)
+        clear_settings(config_con)
+        settings_main(True, config_con)
 
     config_res = config_cur.execute("SELECT username FROM settings")
     username = config_res.fetchone()[0]
@@ -244,14 +289,14 @@ def init():
         cur = con.cursor()
         try:
             cur.execute("SELECT question FROM tries")
+            check_version(con, False)
         except:
-            cur.execute(
-                "CREATE TABLE tries(question TEXT, answer INTEGER, correct BOOL, thinking_time timestamp, time timestamp)")
-        quiz_main(target_trial, con)
+            make_data_table(con)
+        quiz_main(target_trial, con, config_con)
 
 
 # Mains
-def settings_main(is_init: bool):
+def settings_main(is_init: bool, config_con):
     window = make_settings_window()
     window['-TXTTARGET-'].update("Target points")
     window['-TXTPENALTY-'].update("Point penalty")
@@ -264,8 +309,6 @@ def settings_main(is_init: bool):
     window['-TXTMIN2-'].update("Min:")
 
     if is_init:
-        make_settings_table()
-
         window['-TARGET-'].update("20")
         window['-RESET-'].update(False)
         window['-PENALTY-'].update("2")
@@ -276,7 +319,7 @@ def settings_main(is_init: bool):
         window['-MIN2-'].update(1)
         window['-NEG-'].update(True)
     else:
-        username, target_trial, reset_mistake, point_penalty, max1, min1, max2, min2, do_neg = load_config()
+        username, target_trial, reset_mistake, point_penalty, min1, max1, min2, max2, do_neg = load_config(config_con)
 
         window['-TARGET-'].update(target_trial)
         window['-USER-'].update(username)
@@ -296,13 +339,13 @@ def settings_main(is_init: bool):
         window['-MAX2-'].update(max2)
         window['-NEG-'].update(do_neg)
 
-        config_res.execute("DROP TABLE settings")
-        make_settings_table()
+        clear_settings(config_con)
 
     while True:
         event, values = window.read()
         if event == sg.WINDOW_CLOSED:
-            break
+            window.close()
+            return
 
         elif event == '-TARGET-' and values['-TARGET-']:
             allow_only_number(window, values, '-TARGET-')
@@ -335,65 +378,50 @@ def settings_main(is_init: bool):
 
         elif (event == "-USER-" + "_Enter" or event == "-TARGET-" + "_Enter" or event == "DONE") and values[
             '-USER-'] and values['-TARGET-'] and values['-MIN1-'] and values['-MAX1-'] and values['-MIN2-'] and values[
-            '-MAX2-'] and ((not values['-RESET-'] and values['-PENALTY-']) or values['-RESET-']):
+            '-MAX2-'] and values['-MAX1-'] > values['-MIN1-'] and values['-MAX2-'] > values['-MIN1-'] and (
+                (not values['-RESET-'] and values['-PENALTY-']) or values['-RESET-']):
 
             save_config(values['-USER-'], values['-TARGET-'], values['-RESET-'], values['-PENALTY-'], values['-MIN1-'],
-                        values['-MAX1-'], values['-MIN2-'], values['-MAX2-'], values['-NEG-'])
+                        values['-MAX1-'], values['-MIN2-'], values['-MAX2-'], values['-NEG-'], config_con)
 
             break
 
     window.close()
-    if (is_init == False):
-        global con
-        con = None
-
-        global cur
-        cur = None
-
-        global res
-        res = None
+    if not is_init:
         init()
 
 
-def quiz_main(target_trial_number, con):
+def quiz_main(target_trial_number, con, config_con):
     window = make_quiz_window(target_trial_number)
-    loaded_config = load_config()
-
-    if loaded_config.reset_mistake:
-        loaded_streak = load_last_session_streak(con)
-    else:
-        good, bad = load_last_session_penalty(con)
-        if good is not None and bad is not None:
-            loaded_streak = good - bad * loaded_config.point_penalty
-        else:
-            loaded_streak = 0
+    loaded_config = load_config(config_con)
 
     question, correct_answer = make_question((loaded_config.min1, loaded_config.max1),
                                              (loaded_config.min2, loaded_config.max2), loaded_config.do_neg)
 
     window['-TXT-'].update(f"{question}=")
     window['-IN-'].update("")
-    window['-STREAK-'].update(loaded_streak)
+    answer_streak, act_index = load_last_session(con)
+    if answer_streak is None:
+        answer_streak = 0
+    window['-STREAK-'].update(answer_streak)
 
     last_ans_time = datetime.now()
-    answer_streak = loaded_streak
 
-    last_question = None
-    last_ans = None
-    last_correct = None
-    act_ans = None
+    act_question = question
+    act_correct_answer = correct_answer
+    act_answer = ""
+    initial_index = act_index - 1
 
     if answer_streak >= target_trial_number:
         sg.popup(f"Your job is done for today, because you have answered correctly {answer_streak} times in a row")
         return
-        window.close()
 
     while True:
         event, values = window.read()
         if event == sg.WINDOW_CLOSED:
             break
         elif event == '-IN-' and values['-IN-']:
-            act_ans = allow_only_number(window, values, "-IN-")
+            act_answer = allow_only_number(window, values, "-IN-")
         elif (event == "-IN-" + "_Enter" or event == "Submit") and values['-IN-']:
             value = allow_only_number(window, values, "-IN-")
 
@@ -401,10 +429,7 @@ def quiz_main(target_trial_number, con):
             last_ans_time = datetime.now()
 
             correct = value == correct_answer
-            last_question = question
-            last_ans = value
-            last_correct = correct
-            act_ans = None
+
             if correct:
                 answer_streak += 1
 
@@ -422,27 +447,56 @@ def quiz_main(target_trial_number, con):
                         answer_streak = 0
                     window['-STREAK-'].update(answer_streak)
 
-            save_record(value, question, correct, think_time, con)
+            save_record(value, question, correct, answer_streak, think_time, con)
 
             question, correct_answer = make_question((loaded_config.min1, loaded_config.max1),
                                                      (loaded_config.min2, loaded_config.max2), loaded_config.do_neg)
+            act_question = question
+            act_answer = ""
+            act_correct_answer = correct_answer
+            initial_index = act_index - 1
+            act_index += 1
+
             window["-TXT-"].update(f"{question}=")
             window['-IN-'].update(value="")
 
-        elif event == 'PREV' and last_question:
-            window['-IN-'].update(visible=False)
-            window['-PREVIEW-'].update(last_ans, visible=True)
-            if last_correct:
-                window['-TXT-'].update(f"{last_question}=")
+        elif event == 'PREV':
+            act_index -= 1
+            if act_index >= 0:
+                question, correct, answer, points = load_record(con, act_index)
+                window['-IN-'].update(visible=False)
+                window['-PREVIEW-'].update(answer, visible=True)
+                window['-STREAK-'].update(points)
+                if correct:
+                    window['-TXT-'].update(f"{question}=")
+                else:
+                    window['-TXT-'].update(f"{question}≠")
             else:
-                window['-TXT-'].update(f"{last_question}≠")
-        elif event == 'NEXT' and not window['-IN-'].visible:
-            window['-IN-'].update(act_ans, visible=True)
-            window['-TXT-'].update(f"{question}=")
-            window['-PREVIEW-'].update(visible=False)
+                act_index = 0
+
+        elif event == 'NEXT':
+            act_index += 1
+            if act_index >= initial_index:
+                act_index = initial_index
+                question = act_question
+                correct_answer = act_correct_answer
+                window['-IN-'].update(act_answer, visible=True)
+                window['-TXT-'].update(f"{act_question}=")
+                window['-PREVIEW-'].update(visible=False)
+                window['-STREAK-'].update(answer_streak)
+            else:
+                question, correct, answer, points = load_record(con, act_index)
+                window['-IN-'].update(visible=False)
+                window['-PREVIEW-'].update(answer, visible=True)
+                window['-STREAK-'].update(points)
+                if correct:
+                    window['-TXT-'].update(f"{question}=")
+                else:
+                    window['-TXT-'].update(f"{question}≠")
+
         elif event == 'SETTINGS':
             window.close()
-            settings_main(False)
+            settings_main(False, config_con)
             break
 
     window.close()
