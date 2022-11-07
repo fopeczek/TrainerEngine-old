@@ -192,7 +192,8 @@ def make_quiz_window(target_trial_number):
               [sg.Push(), sg.ProgressBar(target_trial_number, orientation='h', size=(50, 20), key='-STREAK-'),
                sg.Push()],
               [sg.Button('< Prev', enable_events=True, key='PREV', mouseover_colors=("white", "black")), sg.Push(),
-               sg.Button('Settings', visible=admin_mode, enable_events=True, key='SETTINGS', mouseover_colors=("white", "black")),
+               sg.Button('Settings', visible=admin_mode, enable_events=True, key='SETTINGS',
+                         mouseover_colors=("white", "black")),
                sg.Push(),
                sg.Button('Next >', enable_events=True, key='NEXT', mouseover_colors=("white", "black"))]]
 
@@ -298,31 +299,44 @@ def init():
 # Mains
 def settings_main(is_init: bool, config_con):
     window = make_settings_window()
+
+    window['-TXTUSR-'].update("Username")
+
     window['-TXTTARGET-'].update("Target points")
     window['-TXTPENALTY-'].update("Point penalty")
-    window['-TXTUSR-'].update("Username")
+
     window['-TXTNUM1-'].update("Range num 1:")
     window['-TXTMAX1-'].update("Max:")
     window['-TXTMIN1-'].update("Min:")
+
     window['-TXTNUM2-'].update("Range num 2:")
     window['-TXTMAX2-'].update("Max:")
     window['-TXTMIN2-'].update("Min:")
 
     if is_init:
+        window['-USER-'].update("")
         window['-TARGET-'].update("20")
+
         window['-RESET-'].update(False)
         window['-PENALTY-'].update("2")
-        window['-USER-'].update("")
-        window['-MAX1-'].update(40)
+
         window['-MIN1-'].update(10)
-        window['-MAX2-'].update(4)
+        MIN1 = 10
+        window['-MAX1-'].update(40)
+        MAX1 = 40
+
         window['-MIN2-'].update(1)
+        MIN2 = 1
+        window['-MAX2-'].update(4)
+        MAX2 = 4
+
         window['-NEG-'].update(True)
     else:
         username, target_trial, reset_mistake, point_penalty, min1, max1, min2, max2, do_neg = load_config(config_con)
 
-        window['-TARGET-'].update(target_trial)
         window['-USER-'].update(username)
+        window['-TARGET-'].update(target_trial)
+
         window['-RESET-'].update(reset_mistake)
         window['-PENALTY-'].update(point_penalty)
 
@@ -334,9 +348,15 @@ def settings_main(is_init: bool, config_con):
             window["-PENALTY-"].update(visible=True)
 
         window['-MIN1-'].update(min1)
+        MIN1 = min1
         window['-MAX1-'].update(max1)
+        MAX1 = max1
+
         window['-MIN2-'].update(min2)
+        MIN2 = min2
         window['-MAX2-'].update(max2)
+        MAX2 = max2
+
         window['-NEG-'].update(do_neg)
 
         clear_settings(config_con)
@@ -354,16 +374,16 @@ def settings_main(is_init: bool, config_con):
             allow_only_number(window, values, '-PENALTY-')
 
         elif event == '-MIN1-' and values['-MIN1-']:
-            allow_only_number(window, values, '-MIN1-')
+            MIN1 = allow_only_number(window, values, '-MIN1-')
 
         elif event == '-MAX1-' and values['-MAX1-']:
-            allow_only_number(window, values, '-MAX1-')
+            MAX1 = allow_only_number(window, values, '-MAX1-')
 
         elif event == '-MIN2-' and values['-MIN2-']:
-            allow_only_number(window, values, '-MIN2-')
+            MIN2 = allow_only_number(window, values, '-MIN2-')
 
         elif event == '-MAX2-' and values['-MAX2-']:
-            allow_only_number(window, values, '-MAX2-')
+            MAX2 = allow_only_number(window, values, '-MAX2-')
 
         elif event == '-USER-' and values['-USER-']:
             allow_no_space(window, values, '-USER-')
@@ -378,7 +398,7 @@ def settings_main(is_init: bool, config_con):
 
         elif (event == "-USER-" + "_Enter" or event == "-TARGET-" + "_Enter" or event == "DONE") and values[
             '-USER-'] and values['-TARGET-'] and values['-MIN1-'] and values['-MAX1-'] and values['-MIN2-'] and values[
-            '-MAX2-'] and values['-MAX1-'] > values['-MIN1-'] and values['-MAX2-'] > values['-MIN1-'] and (
+            '-MAX2-'] and MIN1 <= MAX1 and MIN2 <= MAX2 and (
                 (not values['-RESET-'] and values['-PENALTY-']) or values['-RESET-']):
 
             save_config(values['-USER-'], values['-TARGET-'], values['-RESET-'], values['-PENALTY-'], values['-MIN1-'],
