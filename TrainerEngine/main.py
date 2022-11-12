@@ -298,7 +298,7 @@ def init():
     try:
         config_res = config_cur.execute("SELECT * FROM settings")
     except:
-        make_settings_table(config_con)
+        make_settings_table(config_con, True)
         settings_main(True, config_con)
 
     try:
@@ -557,3 +557,6 @@ def quiz_main(target_trial_number, con, config_con):
     save_last(act_answer, act_question, act_correct_answer, con)
 
     window.close()
+
+
+init()
