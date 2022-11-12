@@ -5,9 +5,9 @@ from datetime import datetime
 from collections import namedtuple
 
 config_version = "1.0.0"
-data_version = "2.0.0"
+data_version = "3.0.0"
 
-admin_mode = False
+admin_mode = True
 
 
 # Utility
@@ -48,6 +48,22 @@ def allow_no_space(window, values, key):
     return value
 
 
+def make_question(first_range: tuple[int, int], second_range: tuple[int, int], do_neg) -> tuple[
+    str, int]:
+    num1 = randint(first_range[0], first_range[1])
+    num2 = randint(second_range[0], second_range[1])
+    is_neg = 0
+    if do_neg:
+        is_neg = randint(0, 1)
+    if is_neg == 1:
+        num2 = -num2  # negate num
+    if num2 > 0:
+        question = f"{num1}+{num2}"
+    else:
+        question = f"{num1}{num2}"  # no need to add - cuz the num is already with minus
+    return question, num1 + num2
+
+
 # SQLite userdata
 def load_last_session(con) -> tuple[int, int]:
     template = """SELECT points FROM tries WHERE time>? ORDER BY time DESC LIMIT 1;"""
@@ -84,9 +100,27 @@ def load_record(con, index: int) -> tuple[str, bool, str, int]:  # question, cor
     return out
 
 
+# SQLite last question
+def save_last(value: int, question: str, correct_answer: int, con):
+    template = """INSERT INTO 'last' ('question', 'answer', 'correct_answer', 'time') VALUES (?, ?, ?, ?);"""
+
+    data = (question, value, correct_answer, datetime.now())
+    cur = con.cursor()
+    cur.execute(template, data)
+    con.commit()
+
+
+def load_last(con) -> tuple[str, int, int] | None:
+    cur = con.cursor()
+    out = cur.execute("""SELECT question, answer, correct_answer FROM last;""").fetchone()
+    return out
+
+
+# SQLite config
 def save_config(username: str, target_trial: int, reset_mistake: bool, point_penalty: int, min1: int, max1: int,
                 min2: int, max2: int, do_neg: bool, con):
     cur = con.cursor()
+    clear_settings(con)
     template = """INSERT INTO 'settings' ('username', 'target_trial', 'reset_mistake', 'point_penalty', 'min1', 
     'max1', 'min2', 'max2', 'do_neg') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?); """
 
@@ -95,7 +129,6 @@ def save_config(username: str, target_trial: int, reset_mistake: bool, point_pen
     con.commit()
 
 
-# SQLite config
 def load_config(con):
     cur = con.cursor()
     res = cur.execute("SELECT username FROM settings")
@@ -128,31 +161,23 @@ def load_config(con):
 
 def clear_settings(con):
     cur = con.cursor()
-    cur.execute("DROP TABLE settings")
+    cur.execute("DELETE FROM settings")
     con.commit()
-    make_settings_table(con)
 
 
-def make_settings_table(con):
+def make_settings_table(con, commit: bool):
     cur = con.cursor()
     cur.execute(
         "CREATE TABLE settings(username TEXT, target_trial INTEGER, reset_mistake BOOL, point_penalty INTEGER, "
         "min1 INTEGER, max1 INTEGER, min2 INTEGER, max2 INTEGER, do_neg BOOL)")
-    con.commit()
-
-
-def make_data_table(con):
-    cur = con.cursor()
-    cur.execute(
-        "CREATE TABLE tries(question TEXT, answer INTEGER, correct BOOL, points INTEGER, thinking_time timestamp, time timestamp)")
-    con.commit()
+    if commit:
+        con.commit()
 
 
 def clear_versions_table(con, config):
     cur = con.cursor()
-    cur.execute("DROP TABLE versions")
+    cur.execute("DELETE FROM versions")
     con.commit()
-    make_versions_table(con, config)
 
 
 def make_versions_table(con, config):
@@ -167,23 +192,28 @@ def make_versions_table(con, config):
     con.commit()
 
 
-# Questioning
-def make_question(first_range: tuple[int, int], second_range: tuple[int, int], do_neg) -> tuple[
-    str, int]:
-    num1 = randint(first_range[0], first_range[1])
-    num2 = randint(second_range[0], second_range[1])
-    is_neg = 0
-    if (do_neg):
-        is_neg = randint(0, 1)
-    if is_neg == 1:
-        num2 = -num2  # negate num
-    if num2 > 0:
-        question = f"{num1}+{num2}"
-    else:
-        question = f"{num1}{num2}"  # no need to add - cuz the num is already with minus
-    return question, num1 + num2
+def make_data_table(con):
+    cur = con.cursor()
+    cur.execute(
+        "CREATE TABLE tries(question TEXT, answer INTEGER, correct BOOL, points INTEGER, thinking_time timestamp, time timestamp)")
+    con.commit()
+    make_last_table(con)
 
 
+def make_last_table(con):
+    cur = con.cursor()
+    cur.execute(
+        "CREATE TABLE last(question TEXT, answer INTEGER, correct_answer INTEGER, time timestamp)")
+    con.commit()
+
+def clear_last_table(con):
+    cur = con.cursor()
+    cur.execute("DELETE FROM last")
+    con.commit()
+
+
+
+# Window makers
 def make_quiz_window(target_trial_number):
     sg.theme('Black')
     sg.theme_button_color("white on black")
@@ -258,6 +288,7 @@ def check_version(con, config: bool):
             raise Exception("Error: version missmatch! Remove your user data file")
 
 
+# Init
 def init():
     config_con = sqlite3.connect("config.db")
     config_cur = config_con.cursor()
@@ -274,10 +305,8 @@ def init():
         config_res = config_cur.execute("SELECT username FROM settings")
         username = config_res.fetchone()[0]
         if username is None:
-            clear_settings(config_con)
             settings_main(True, config_con)
     except:
-        clear_settings(config_con)
         settings_main(True, config_con)
 
     config_res = config_cur.execute("SELECT username FROM settings")
@@ -288,9 +317,9 @@ def init():
     if username != "" and target_trial is not None:
         con = sqlite3.connect(f"{username}.db")
         cur = con.cursor()
+        check_version(con, False)
         try:
             cur.execute("SELECT question FROM tries")
-            check_version(con, False)
         except:
             make_data_table(con)
         quiz_main(target_trial, con, config_con)
@@ -359,8 +388,6 @@ def settings_main(is_init: bool, config_con):
 
         window['-NEG-'].update(do_neg)
 
-        clear_settings(config_con)
-
     while True:
         event, values = window.read()
         if event == sg.WINDOW_CLOSED:
@@ -415,11 +442,16 @@ def quiz_main(target_trial_number, con, config_con):
     window = make_quiz_window(target_trial_number)
     loaded_config = load_config(config_con)
 
-    question, correct_answer = make_question((loaded_config.min1, loaded_config.max1),
-                                             (loaded_config.min2, loaded_config.max2), loaded_config.do_neg)
+    loaded_last=load_last(con)
+    if loaded_last is None:
+        question, correct_answer = make_question((loaded_config.min1, loaded_config.max1),
+                                                 (loaded_config.min2, loaded_config.max2), loaded_config.do_neg)
+        act_answer=""
+    else:
+        question, act_answer, correct_answer =loaded_last
 
     window['-TXT-'].update(f"{question}=")
-    window['-IN-'].update("")
+    window['-IN-'].update(act_answer)
     answer_streak, act_index = load_last_session(con)
     if answer_streak is None:
         answer_streak = 0
@@ -429,8 +461,7 @@ def quiz_main(target_trial_number, con, config_con):
 
     act_question = question
     act_correct_answer = correct_answer
-    act_answer = ""
-    initial_index = act_index - 1
+    last_record_index = act_index - 1
 
     if answer_streak >= target_trial_number:
         sg.popup(f"Your job is done for today, because you have answered correctly {answer_streak} times in a row")
@@ -474,7 +505,7 @@ def quiz_main(target_trial_number, con, config_con):
             act_question = question
             act_answer = ""
             act_correct_answer = correct_answer
-            initial_index = act_index - 1
+            last_record_index = act_index
             act_index += 1
 
             window["-TXT-"].update(f"{question}=")
@@ -485,6 +516,7 @@ def quiz_main(target_trial_number, con, config_con):
             if act_index >= 0:
                 question, correct, answer, points = load_record(con, act_index)
                 window['-IN-'].update(visible=False)
+                window['-IN-'].block_focus()
                 window['-PREVIEW-'].update(answer, visible=True)
                 window['-STREAK-'].update(points)
                 if correct:
@@ -496,17 +528,19 @@ def quiz_main(target_trial_number, con, config_con):
 
         elif event == 'NEXT':
             act_index += 1
-            if act_index >= initial_index:
-                act_index = initial_index
+            if act_index > last_record_index:
+                act_index = last_record_index + 1
                 question = act_question
                 correct_answer = act_correct_answer
                 window['-IN-'].update(act_answer, visible=True)
+                window['-IN-'].set_focus()
                 window['-TXT-'].update(f"{act_question}=")
                 window['-PREVIEW-'].update(visible=False)
                 window['-STREAK-'].update(answer_streak)
             else:
                 question, correct, answer, points = load_record(con, act_index)
                 window['-IN-'].update(visible=False)
+                window['-IN-'].block_focus()
                 window['-PREVIEW-'].update(answer, visible=True)
                 window['-STREAK-'].update(points)
                 if correct:
@@ -519,7 +553,7 @@ def quiz_main(target_trial_number, con, config_con):
             settings_main(False, config_con)
             break
 
+    clear_last_table(con)
+    save_last(act_answer, act_question, act_correct_answer, con)
+
     window.close()
-
-
-init()
