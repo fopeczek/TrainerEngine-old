@@ -1,5 +1,5 @@
 import PySimpleGUI as sg
-import SQL_manager as sql
+from .SQL_manager import Config_template
 
 WINDOW_CLOSED = sg.WINDOW_CLOSED
 
@@ -77,7 +77,7 @@ def make_settings_window():
     return window
 
 
-def update_options(window, config: sql.Config_template):
+def update_options(window, config: Config_template):
     window['-USER-'].update(config.username)
     window['-TARGET-'].update(config.target_trial)
 

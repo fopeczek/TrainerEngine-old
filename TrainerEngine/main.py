@@ -1,9 +1,14 @@
 from datetime import datetime
-import SQL_manager as sql
+# import SQL_manager as sql
 from contextlib import closing
 from enum import Enum, auto
-import window_manager as gui
-import question_manager as quiz
+# import window_manager as gui
+# import question_manager as quiz
+from .SQL_manager import connect_config_database, check_version, make_settings_table, connect_user_database, \
+    make_data_table, Config_template, load_config, save_config, \
+    load_last, load_last_session, save_record, load_record, save_last
+from .window_manager import make_settings_window, update_options, WINDOW_CLOSED, make_quiz_window, popup_job_done
+from .question_manager import make_question, score_number, default_percent_answer, score_percent
 
 admin_mode = True
 
@@ -63,14 +68,14 @@ def regex(window, values, key, type: Regex_type):
 
 # Init
 def init():
-    config_con = sql.connect_config_database()
-    sql.check_version(config_con, True)
+    config_con = connect_config_database()
+    check_version(config_con, True)
 
     try:
         with closing(config_con.cursor()) as cur:
             cur.execute("SELECT * FROM settings")
     except:
-        sql.make_settings_table(config_con)
+        make_settings_table(config_con)
         settings_main(True, config_con)
 
     try:
@@ -87,30 +92,30 @@ def init():
         target_trial = cur.execute("SELECT target_trial FROM settings").fetchone()[0]
 
     if username != "" and target_trial is not None:
-        con = sql.connect_user_database(username)
-        sql.check_version(con, False)
+        con = connect_user_database(username)
+        check_version(con, False)
         try:
             with closing(con.cursor()) as cur:
                 cur.execute("SELECT question FROM tries")
         except:
-            sql.make_data_table(con)
+            make_data_table(con)
         quiz_main(target_trial, con, config_con)
 
 
 # Mains
 def settings_main(is_init: bool, config_con):
-    window = gui.make_settings_window()
+    window = make_settings_window()
 
     if is_init:
-        config = sql.Config_template("", 20, False, 2, False, 0.3, 0.8, 10, 40, 1, 4, True)
+        config = Config_template("", 20, False, 2, False, 0.3, 0.8, 10, 40, 1, 4, True)
     else:
-        config = sql.load_config(config_con)
+        config = load_config(config_con)
 
-    gui.update_options(window, config)
+    update_options(window, config)
 
     while True:
         event, values = window.read()
-        if event == gui.WINDOW_CLOSED:
+        if event == WINDOW_CLOSED:
             window.close()
             return
 
@@ -143,11 +148,11 @@ def settings_main(is_init: bool, config_con):
 
         elif event == '-RESET-':
             config.reset_mistake = values['-RESET-']
-            gui.update_options(window, config)
+            update_options(window, config)
 
         elif event == '-PERCENT-':
             config.percent = values['-PERCENT-']
-            gui.update_options(window, config)
+            update_options(window, config)
 
 
         elif "_Enter" in event or event == "DONE":
@@ -157,11 +162,11 @@ def settings_main(is_init: bool, config_con):
 
                 if values['-OPTION1-'] and values['-OPTION3-']:
                     if values["-PERCENT-"]:
-                        sql.save_config(config, config_con)
+                        save_config(config, config_con)
 
                     elif values['-OPTION2-'] and values['-OPTION4-'] and \
                             config.min1 <= config.max1 and config.min2 <= config.max2:
-                        sql.save_config(config, config_con)
+                        save_config(config, config_con)
 
             break
 
@@ -171,21 +176,21 @@ def settings_main(is_init: bool, config_con):
 
 
 def quiz_main(target_trial_number, con, config_con):
-    window = gui.make_quiz_window(target_trial_number, admin_mode)
-    config = sql.load_config(config_con)
+    window = make_quiz_window(target_trial_number, admin_mode)
+    config = load_config(config_con)
 
-    last = sql.load_last(con)
+    last = load_last(con)
 
     if last is None:
-        record = quiz.make_question(config)
+        record = make_question(config)
     else:
         record = last
         if config.percent:
             if record.question[-1] != '%':
-                record = quiz.make_question(config)
+                record = make_question(config)
         else:
             if record.question[-1] == '%':
-                record = quiz.make_question(config)
+                record = make_question(config)
 
     if config.percent:
         safety_lock = True
@@ -195,7 +200,7 @@ def quiz_main(target_trial_number, con, config_con):
         window['-IN-'].update(record.answer)
 
     window['-TXT-'].update(f"{record.question}=")
-    record.points, act_index = sql.load_last_session(con)
+    record.points, act_index = load_last_session(con)
     if record.points is None:
         record.points = 0
     window['-STREAK-'].update(record.points)
@@ -205,12 +210,12 @@ def quiz_main(target_trial_number, con, config_con):
     last_record_index = act_index - 1
 
     if record.points >= target_trial_number:
-        gui.popup_job_done(record.points)
+        popup_job_done(record.points)
         return
 
     while True:
         event, values = window.read()
-        if event == gui.WINDOW_CLOSED:
+        if event == WINDOW_CLOSED:
             break
         elif event == '-PERCENT-':
             record.answer = values['-PERCENT-']
@@ -220,14 +225,14 @@ def quiz_main(target_trial_number, con, config_con):
             record.think_time = datetime.now() - last_ans_time
             last_ans_time = datetime.now()
 
-            record.correct = quiz.score_number(record)
+            record.correct = score_number(record)
 
             if record.correct:
                 record.points += 1
 
                 window['-STREAK-'].update(record.points)
                 if record.points >= target_trial_number:
-                    gui.popup_job_done(record.points)
+                    popup_job_done(record.points)
                     break
             else:
                 if config.reset_mistake:
@@ -239,10 +244,10 @@ def quiz_main(target_trial_number, con, config_con):
                         record.points = 0
                     window['-STREAK-'].update(record.points)
 
-            sql.save_record(record, con)
+            save_record(record, con)
 
             points = record.points
-            record = quiz.make_question(config)
+            record = make_question(config)
             record.points = points
 
             last_record_index += 1
@@ -254,7 +259,7 @@ def quiz_main(target_trial_number, con, config_con):
         elif event == 'PREV':
             act_index -= 1
             if act_index >= 0:
-                loaded_record = sql.load_record(con, act_index)
+                loaded_record = load_record(con, act_index)
 
                 if loaded_record.question[-1] == '%':
                     window['-IN-'].update(visible=False)
@@ -296,7 +301,7 @@ def quiz_main(target_trial_number, con, config_con):
             act_index += 1
             if config.percent:
                 if act_index > last_record_index + 1:  # Submit answer
-                    if record.answer == quiz.default_percent_answer and safety_lock:
+                    if record.answer == default_percent_answer and safety_lock:
                         safety_lock = False
                     else:
                         safety_lock = True
@@ -311,15 +316,15 @@ def quiz_main(target_trial_number, con, config_con):
                         record.answer = values['-PERCENT-']
                         last_record_index += 1
                         act_index = last_record_index + 1
-                        record.correct = quiz.score_percent(record, config.good_threshold)
+                        record.correct = score_percent(record, config.good_threshold)
 
                         if values['-PERCENT-'] == record.correct_answer or record.correct:
                             record.points += 1
 
                             window['-STREAK-'].update(record.points)
                             if record.points >= target_trial_number:
-                                sql.save_record(record, con)
-                                gui.popup_job_done(record.points)
+                                save_record(record, con)
+                                popup_job_done(record.points)
                                 break
                             record.correct = True
                         else:
@@ -333,10 +338,10 @@ def quiz_main(target_trial_number, con, config_con):
                                 window['-STREAK-'].update(record.points)
                             record.correct = False
 
-                        sql.save_record(record, con)
+                        save_record(record, con)
 
                         points = record.points
-                        record = quiz.make_question(config)
+                        record = make_question(config)
                         record.points = points
 
                         window['-TXT-'].update(f"{record.question}=")
@@ -364,7 +369,7 @@ def quiz_main(target_trial_number, con, config_con):
                     window['-STREAK-'].update(record.points)
 
             if act_index <= last_record_index:
-                loaded_record = sql.load_record(con, act_index)
+                loaded_record = load_record(con, act_index)
 
                 if loaded_record.question[-1] == '%':
                     window['-IN-'].update(visible=False)
@@ -400,11 +405,11 @@ def quiz_main(target_trial_number, con, config_con):
 
         elif event == 'SETTINGS':
             window.close()
-            sql.save_last(record, con)
+            save_last(record, con)
             settings_main(False, config_con)
             break
 
-    sql.save_last(record, con)
+    save_last(record, con)
 
     window.close()
 

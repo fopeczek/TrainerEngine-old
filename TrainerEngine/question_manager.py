@@ -1,12 +1,13 @@
 from random import randint
 import numpy as np
-import SQL_manager as sql
+# import SQL_manager as sql
+from .SQL_manager import Record_template
 
 default_percent_answer = 50
 
 
 # Scoring
-def score_number(record:sql.Record_template) -> bool:
+def score_number(record:Record_template) -> bool:
     return record.answer == record.correct_answer
 
 
@@ -23,7 +24,7 @@ def score_in_percents(answer: int, correct_answer: int, threshold) -> float:
     return 1 - min(max(score - 0.1, 0) / threshold, 1.)
 
 
-def score_percent(record: sql.Record_template, threshold):
+def score_percent(record: Record_template, threshold):
     if score_in_percents(record.answer, record.correct_answer, threshold) > 0:
         return True
     else:
@@ -41,7 +42,7 @@ def make_question(loaded_config):
                                                         (loaded_config.min2, loaded_config.max2),
                                                         loaded_config.do_neg)
         answer = ""
-    out = sql.Record_template(question, answer, correct_answer)
+    out = Record_template(question, answer, correct_answer)
     return out
 
 
