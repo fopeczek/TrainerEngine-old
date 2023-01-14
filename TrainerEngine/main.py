@@ -1,16 +1,17 @@
 from datetime import datetime
-# import SQL_manager as sql
 from contextlib import closing
 from enum import Enum, auto
-# import window_manager as gui
-# import question_manager as quiz
-from .SQL_manager import connect_config_database, check_version, make_settings_table, connect_user_database, \
-    make_data_table, Config_template, load_config, save_config, \
-    load_last, load_last_session, save_record, load_record, save_last
-from .window_manager import make_settings_window, update_options, WINDOW_CLOSED, make_quiz_window, popup_job_done
-from .question_manager import make_question, score_number, default_percent_answer, score_percent
+import sys
 
-admin_mode = True
+from .SQL_manager import connect_config_database, connect_user_database, Config_template, load_config, save_config, \
+    load_last, save_last, load_last_record, save_record, load_record
+
+from .window_manager import make_settings_window, update_options, WINDOW_CLOSED, make_quiz_window, popup_job_done, \
+    show_preview, hide_preview
+
+from .question_manager import make_question, score_anwser, default_percent_answer
+
+admin_mode = False
 
 
 class Regex_type(Enum):
@@ -30,7 +31,6 @@ def regex(window, values, key, type: Regex_type):
             minus = True
     elif type == Regex_type.floating:
         dot = True
-    #     if values[key][0] != ''
 
     for char in values[key]:
         if type == Regex_type.no_space:
@@ -68,48 +68,33 @@ def regex(window, values, key, type: Regex_type):
 
 # Init
 def init():
+    global admin_mode
+
+    if len(sys.argv) > 1 and sys.argv[1] == "admin":
+        admin_mode = True
+    else:
+        admin_mode = False
+
     config_con = connect_config_database()
-    check_version(config_con, True)
 
     try:
-        with closing(config_con.cursor()) as cur:
-            cur.execute("SELECT * FROM settings")
+        config = load_config(config_con)
     except:
-        make_settings_table(config_con)
-        settings_main(True, config_con)
+        config = settings_main(True, config_con, None)
 
-    try:
-        with closing(config_con.cursor()) as cur:
-            username = cur.execute("SELECT username FROM settings").fetchone()[0]
-        if username is None:
-            settings_main(True, config_con)
-    except:
-        settings_main(True, config_con)
+    con = connect_user_database(config.username)
 
-    with closing(config_con.cursor()) as cur:
-        username = cur.execute("SELECT username FROM settings").fetchone()[0]
-    with closing(config_con.cursor()) as cur:
-        target_trial = cur.execute("SELECT target_trial FROM settings").fetchone()[0]
-
-    if username != "" and target_trial is not None:
-        con = connect_user_database(username)
-        check_version(con, False)
-        try:
-            with closing(con.cursor()) as cur:
-                cur.execute("SELECT question FROM tries")
-        except:
-            make_data_table(con)
-        quiz_main(target_trial, con, config_con)
+    quiz_main(con, config, config_con)
 
 
 # Mains
-def settings_main(is_init: bool, config_con):
-    window = make_settings_window()
-
+def settings_main(is_init: bool, config_con, con):
     if is_init:
         config = Config_template("", 20, False, 2, False, 0.3, 0.8, 10, 40, 1, 4, True)
     else:
         config = load_config(config_con)
+
+    window = make_settings_window(config)
 
     update_options(window, config)
 
@@ -163,24 +148,63 @@ def settings_main(is_init: bool, config_con):
                 if values['-OPTION1-'] and values['-OPTION3-']:
                     if values["-PERCENT-"]:
                         save_config(config, config_con)
+                        break
 
                     elif values['-OPTION2-'] and values['-OPTION4-'] and \
                             config.min1 <= config.max1 and config.min2 <= config.max2:
                         save_config(config, config_con)
-
-            break
+                        break
 
     window.close()
     if not is_init:
-        init()
+        quiz_main(con, config, config_con)
+    else:
+        return config
 
 
-def quiz_main(target_trial_number, con, config_con):
-    window = make_quiz_window(target_trial_number, admin_mode)
-    config = load_config(config_con)
+def submit_user_input(window, con, config, record, last_ans_time):
+    record.think_time = datetime.now() - last_ans_time
+    last_ans_time = datetime.now()
+
+    record.correct = score_anwser(config, record)
+
+    if record.correct:
+        record.points += 1
+
+        window['-STREAK-'].update(record.points)
+        if record.points >= config.target_trial:
+            save_record(record, con)
+            window.close()
+            popup_job_done(record.points, config.target_trial)
+            return [True, last_ans_time]
+    else:
+        if config.reset_mistake:
+            record.points = 0
+            window['-STREAK-'].update(record.points)
+        else:
+            record.points -= config.point_penalty
+            if record.points < 0:
+                record.points = 0
+            window['-STREAK-'].update(record.points)
+
+    save_record(record, con)
+
+    points = record.points
+    record = make_question(config)
+    record.points = points
+
+    window["-TXT-"].update(f"{record.question}=")
+    if config.percent:
+        window['-PERCENT-'].update(record.answer, visible=True)
+    else:
+        window['-IN-'].update(value="")
+    return [False, record, last_ans_time]
+
+
+def quiz_main(con, config: Config_template, config_con):
+    window = make_quiz_window(config, admin_mode)
 
     last = load_last(con)
-
     if last is None:
         record = make_question(config)
     else:
@@ -193,24 +217,31 @@ def quiz_main(target_trial_number, con, config_con):
                 record = make_question(config)
 
     if config.percent:
-        safety_lock = True
+        window['-PERCENT-'].update(record.answer)
         window['-IN-'].update(visible=False)
-        window['-PERCENT-'].update(record.answer, visible=True)
     else:
         window['-IN-'].update(record.answer)
+        window['-PERCENT-'].update(visible=False)
 
     window['-TXT-'].update(f"{record.question}=")
-    record.points, act_index = load_last_session(con)
+
+    safety_lock = True
+
+    index = 0
+    record.points, act_index = load_last_record(con)
     if record.points is None:
         record.points = 0
+        act_index = index
+    else:
+        index = act_index
+
     window['-STREAK-'].update(record.points)
 
     last_ans_time = datetime.now()
 
-    last_record_index = act_index - 1
-
-    if record.points >= target_trial_number:
-        popup_job_done(record.points)
+    if record.points >= config.target_trial:
+        window.close()
+        popup_job_done(record.points, config.target_trial)
         return
 
     while True:
@@ -219,199 +250,79 @@ def quiz_main(target_trial_number, con, config_con):
             break
         elif event == '-PERCENT-':
             record.answer = values['-PERCENT-']
+            safety_lock = True
         elif event == '-IN-' and values['-IN-']:
             record.answer = regex(window, values, "-IN-", Regex_type.negative_number)
         elif event == "-IN-" + "_Enter" and values['-IN-']:
-            record.think_time = datetime.now() - last_ans_time
-            last_ans_time = datetime.now()
+            act_index += 1
+            index = act_index
 
-            record.correct = score_number(record)
-
-            if record.correct:
-                record.points += 1
-
-                window['-STREAK-'].update(record.points)
-                if record.points >= target_trial_number:
-                    popup_job_done(record.points)
-                    break
-            else:
-                if config.reset_mistake:
-                    record.points = 0
-                    window['-STREAK-'].update(record.points)
-                else:
-                    record.points -= config.point_penalty
-                    if record.points < 0:
-                        record.points = 0
-                    window['-STREAK-'].update(record.points)
-
-            save_record(record, con)
-
-            points = record.points
-            record = make_question(config)
-            record.points = points
-
-            last_record_index += 1
-            act_index = last_record_index + 1
-
-            window["-TXT-"].update(f"{record.question}=")
-            window['-IN-'].update(value="")
-
-        elif event == 'PREV':
-            act_index -= 1
-            if act_index >= 0:
-                loaded_record = load_record(con, act_index)
-
-                if loaded_record.question[-1] == '%':
-                    window['-IN-'].update(visible=False)
-                    window['-IN-'].block_focus()
-
-                    window['-PREVIEW-'].update(f"{loaded_record.answer}%", visible=True)
-
-                    window['-PERCENT_PREVIEW_CORRECT-'].update(loaded_record.correct_answer, visible=True)
-                    window['-PERCENT_PREVIEW_USER-'].update(loaded_record.answer, visible=True)
-                    window['-PERCENT-'].update(visible=False)
-
-                    if loaded_record.correct_answer == loaded_record.answer:
-                        window['-TXT-'].update(f"{loaded_record.question}=")
-                    else:
-                        if loaded_record.correct:
-                            window['-TXT-'].update(f"{loaded_record.question}≈")
-                        else:
-                            window['-TXT-'].update(f"{loaded_record.question}≠")
-                else:
-                    window['-IN-'].update(visible=False)
-                    window['-IN-'].block_focus()
-
-                    window['-PREVIEW-'].update(loaded_record.answer, visible=True)
-
-                    window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
-                    window['-PERCENT_PREVIEW_USER-'].update(visible=False)
-                    window['-PERCENT-'].update(visible=False)
-
-                    if loaded_record.correct:
-                        window['-TXT-'].update(f"{loaded_record.question}=")
-                    else:
-                        window['-TXT-'].update(f"{loaded_record.question}≠")
-
-                window['-STREAK-'].update(loaded_record.points)
-            else:
-                act_index = 0
+            stop, record, last_ans_time = submit_user_input(window, con, config, record, last_ans_time)
+            if stop:
+                break
 
         elif event == 'NEXT':
-            act_index += 1
-            if config.percent:
-                if act_index > last_record_index + 1:  # Submit answer
-                    if record.answer == default_percent_answer and safety_lock:
-                        safety_lock = False
-                    else:
-                        safety_lock = True
+            index += 1
+            if config.percent and index > act_index:  # Submit answer
+                if record.answer == default_percent_answer and safety_lock:  # Safety lock
+                    safety_lock = False
 
-                        window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
-                        window['-PERCENT_PREVIEW_USER-'].update(visible=False)
-                        window['-PREVIEW-'].update(visible=False)
-                        window['-IN-'].update(visible=False)
+                    index = act_index
 
-                        record.think_time = datetime.now() - last_ans_time
-                        last_ans_time = datetime.now()
-                        record.answer = values['-PERCENT-']
-                        last_record_index += 1
-                        act_index = last_record_index + 1
-                        record.correct = score_percent(record, config.good_threshold)
-
-                        if values['-PERCENT-'] == record.correct_answer or record.correct:
-                            record.points += 1
-
-                            window['-STREAK-'].update(record.points)
-                            if record.points >= target_trial_number:
-                                save_record(record, con)
-                                popup_job_done(record.points)
-                                break
-                            record.correct = True
-                        else:
-                            if config.reset_mistake:
-                                record.points = 0
-                                window['-STREAK-'].update(record.points)
-                            else:
-                                record.points -= config.point_penalty
-                                if record.points < 0:
-                                    record.points = 0
-                                window['-STREAK-'].update(record.points)
-                            record.correct = False
-
-                        save_record(record, con)
-
-                        points = record.points
-                        record = make_question(config)
-                        record.points = points
-
-                        window['-TXT-'].update(f"{record.question}=")
-                        window['-PERCENT-'].update(record.answer, visible=True)
+                    continue
                 else:
-                    window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
-                    window['-PERCENT_PREVIEW_USER-'].update(visible=False)
-                    window['-PREVIEW-'].update(visible=False)
-                    window['-IN-'].update(visible=False)
-                    window['-TXT-'].update(f"{record.question}=")
-                    window['-PERCENT-'].update(visible=True)
+                    safety_lock = True
+
+                    act_index += 1
+                    index = act_index
+
+                    stop, record, last_ans_time = submit_user_input(window, con, config, record, last_ans_time)
+                    if stop:
+                        break
+
+                    continue
+            elif not config.percent and index > act_index:
+                index = act_index
+
+            if index == act_index:  # Load act record
+                hide_preview(window, config, record)
             else:
-                if act_index > last_record_index:
-                    act_index = last_record_index + 1
+                loaded_record = load_record(con, index)
+                show_preview(window, loaded_record)
 
-                    window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
-                    window['-PERCENT_PREVIEW_USER-'].update(visible=False)
-                    window['-PERCENT-'].update(visible=False)
+            safety_lock = True
 
-                    window['-PREVIEW-'].update(visible=False)
+        elif event == 'PREV':
+            index -= 1
+            if index < 0:
+                index = 0
+                continue
+            if index < act_index:
+                loaded_record = load_record(con, index)
+                show_preview(window, loaded_record)
 
-                    window['-TXT-'].update(f"{record.question}=")
-                    window['-IN-'].update(visible=True)
-                    window['-IN-'].set_focus()
-                    window['-STREAK-'].update(record.points)
+            safety_lock = True
 
-            if act_index <= last_record_index:
-                loaded_record = load_record(con, act_index)
+        elif event == 'END':
+            index = act_index
+            hide_preview(window, config, record)
 
-                if loaded_record.question[-1] == '%':
-                    window['-IN-'].update(visible=False)
-                    window['-IN-'].block_focus()
-                    window['-PREVIEW-'].update(f"{loaded_record.answer}%", visible=True)
+            safety_lock = True
 
-                    window['-PERCENT_PREVIEW_CORRECT-'].update(loaded_record.correct_answer, visible=True)
-                    window['-PERCENT_PREVIEW_USER-'].update(loaded_record.answer, visible=True)
-                    window['-PERCENT-'].update(visible=False)
+        elif event == 'HOME':
+            index = 0
+            if index < act_index:
+                loaded_record = load_record(con, index)
+                show_preview(window, loaded_record)
 
-                    if loaded_record.correct_answer == loaded_record.answer:
-                        window['-TXT-'].update(f"{loaded_record.question}=")
-                    else:
-                        if loaded_record.correct:
-                            window['-TXT-'].update(f"{loaded_record.question}≈")
-                        else:
-                            window['-TXT-'].update(f"{loaded_record.question}≠")
-                else:
-                    window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
-                    window['-PERCENT_PREVIEW_USER-'].update(visible=False)
-                    window['-PERCENT-'].update(visible=False)
-
-                    window['-IN-'].update(visible=False)
-                    window['-IN-'].block_focus()
-
-                    window['-PREVIEW-'].update(loaded_record.answer, visible=True)
-                    if loaded_record.correct:
-                        window['-TXT-'].update(f"{loaded_record.question}=")
-                    else:
-                        window['-TXT-'].update(f"{loaded_record.question}≠")
-
-                window['-STREAK-'].update(loaded_record.points)
+            safety_lock = True
 
         elif event == 'SETTINGS':
-            window.close()
             save_last(record, con)
-            settings_main(False, config_con)
+            window.close()
+            settings_main(False, config_con, con)
             break
 
     save_last(record, con)
 
     window.close()
-
-
-init()

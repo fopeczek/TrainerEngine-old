@@ -5,23 +5,27 @@ WINDOW_CLOSED = sg.WINDOW_CLOSED
 
 
 # Window makers
-def make_quiz_window(target_trial_number, admin_mode):
+def make_quiz_window(config: Config_template, admin_mode):
     sg.theme('Black')
     sg.theme_button_color("white on black")
     layout = [[sg.Push(),
                sg.ProgressBar(100, orientation='h', size=(30, 20), visible=False, key='-PERCENT_PREVIEW_CORRECT-')],
-              [sg.Text("Please wait", key="-TXT-"), sg.Text("", visible=False, key="-PREVIEW-"),
+              [sg.Text("", key="-TXT-"), sg.Text("", visible=False, key="-PREVIEW-"),
                sg.ProgressBar(100, orientation='h', size=(30, 20), visible=False, key='-PERCENT_PREVIEW_USER-'),
-               sg.Input(size=(15, 1), key="-IN-", enable_events=True, focus=True),
-               sg.Slider((0, 100), orientation='h', size=(15, 20), visible=False, key='-PERCENT-',
-                         disable_number_display=True, enable_events=True)],
-              [sg.Push(), sg.ProgressBar(target_trial_number, orientation='h', size=(50, 20), key='-STREAK-'),
+               sg.Input(size=(15, 1), key="-IN-", enable_events=True, visible=not config.percent),
+               sg.Slider((0, 100), orientation='h', size=(15, 20), visible=config.percent, key='-PERCENT-',
+                         enable_events=True, disable_number_display=True)],
+              [sg.Push(), sg.ProgressBar(config.target_trial, orientation='h', size=(50, 20), key='-STREAK-'),
                sg.Push()],
-              [sg.Button('< Prev', enable_events=True, key='PREV', mouseover_colors=("white", "black")), sg.Push(),
+              [sg.Button('<<', enable_events=True, key='HOME', mouseover_colors=("white", "black")), sg.Push(),
+               sg.Button('<', visible=True, enable_events=True, key='PREV',
+                         mouseover_colors=("white", "black")),
                sg.Button('Settings', visible=admin_mode, enable_events=True, key='SETTINGS',
                          mouseover_colors=("white", "black")),
+               sg.Button('>', visible=True, enable_events=True, key='NEXT',
+                         mouseover_colors=("white", "black")),
                sg.Push(),
-               sg.Button('Next >', enable_events=True, key='NEXT', mouseover_colors=("white", "black"))]]
+               sg.Button('>>', enable_events=True, key='END', mouseover_colors=("white", "black"))]]
 
     window = sg.Window('Time to learn', layout, font=("Fira", 30), finalize=True)
     window['-IN-'].bind("<Return>", "_Enter")
@@ -31,7 +35,7 @@ def make_quiz_window(target_trial_number, admin_mode):
 
 
 # Config
-def make_settings_window():
+def make_settings_window(config: Config_template):
     sg.theme('Black')
     sg.theme_button_color("white on black")
     layout = [[sg.Text("Username", key="-TXT_USR-"), sg.Input("", key='-USER-', size=(15, 1), enable_events=True)],
@@ -39,27 +43,27 @@ def make_settings_window():
               [sg.Text("Target points", key="-TXT_TARGET-"),
                sg.Input("", key="-TARGET-", size=(8, 1), enable_events=True)],
 
-              [sg.Checkbox("", default=False, key="-RESET-", enable_events=True),
+              [sg.Checkbox("", default=config.reset_mistake, key="-RESET-", enable_events=True),
                sg.Text("Reset after mistake", key="-TXT_RESET-")],
 
-              [sg.Text("Point penalty", key="-TXT_PENALTY-"),
-               sg.Input("", key="-PENALTY-", size=(8, 1), enable_events=True)],
+              [sg.Text("Point penalty", key="-TXT_PENALTY-", visible=not config.reset_mistake),
+               sg.Input("", key="-PENALTY-", size=(8, 1), enable_events=True, visible=not config.reset_mistake)],
 
-              [sg.Checkbox("", default=False, key="-PERCENT-", enable_events=True),
+              [sg.Checkbox("", default=config.percent, key="-PERCENT-", enable_events=True),
                sg.Text("Do percent quiz", key="-TXT_PERCENT-")],
 
-              [sg.Text("Please wait", key="-TXT_OPTION1-"),
+              [sg.Text("", key="-TXT_OPTION1-"),
                sg.Input("", key="-OPTION1-", size=(8, 1), enable_events=True),
-               sg.Text("Please wait", key="-TXT_OPTION2-"),
-               sg.Input("", key="-OPTION2-", size=(8, 1), enable_events=True)],
+               sg.Text("", key="-TXT_OPTION2-", visible=not config.percent),
+               sg.Input("", key="-OPTION2-", size=(8, 1), enable_events=True, visible=not config.percent)],
 
-              [sg.Text("Please wait", key="-TXT_OPTION3-"),
+              [sg.Text("", key="-TXT_OPTION3-"),
                sg.Input("", key="-OPTION3-", size=(8, 1), enable_events=True),
-               sg.Text("Please wait", key="-TXT_OPTION4-"),
-               sg.Input("", key="-OPTION4-", size=(8, 1), enable_events=True)],
+               sg.Text("", key="-TXT_OPTION4-", visible=not config.percent),
+               sg.Input("", key="-OPTION4-", size=(8, 1), enable_events=True, visible=not config.percent)],
 
-              [sg.Checkbox("", default=True, key="-NEG-", enable_events=True),
-               sg.Text("Do negation?", key="-TXT_NEG-")],
+              [sg.Checkbox("", default=config.do_neg, key="-NEG-", enable_events=True, visible=not config.percent),
+               sg.Text("Do negation?", key="-TXT_NEG-", visible=not config.percent)],
 
               [sg.Button("Done", key="DONE", mouseover_colors=("white", "black"), enable_events=True)]]
 
@@ -120,5 +124,57 @@ def update_options(window, config: Config_template):
         window['-TXT_NEG-'].update(visible=True)
 
 
-def popup_job_done(answer_streak):
-    sg.popup(f"Your job is done for today, because you have answered correctly {answer_streak} times in a row")
+def hide_preview(window, config, record):
+    if config.percent:
+        window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
+        window['-PERCENT_PREVIEW_USER-'].update(visible=False)
+        window['-PREVIEW-'].update(visible=False)
+
+        window['-IN-'].update(visible=False)
+
+        window['-TXT-'].update(f"{record.question}=")
+        window['-PERCENT-'].update(visible=True)
+    else:
+        window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
+        window['-PERCENT_PREVIEW_USER-'].update(visible=False)
+        window['-PREVIEW-'].update(visible=False)
+
+        window['-PERCENT-'].update(visible=False)
+
+        window['-TXT-'].update(f"{record.question}=")
+        window['-IN-'].update(visible=True)
+
+    window['-STREAK-'].update(record.points)
+
+
+def show_preview(window, record):
+    window['-IN-'].update(visible=False)
+    window['-PERCENT-'].update(visible=False)
+    window['-STREAK-'].update(record.points)
+
+    if record.question[-1] == '%':  # Percent
+        window['-PREVIEW-'].update(f"{record.answer}%", visible=True)
+        window['-PERCENT_PREVIEW_CORRECT-'].update(record.correct_answer, visible=True)
+        window['-PERCENT_PREVIEW_USER-'].update(record.answer, visible=True)
+
+        if record.correct_answer == record.answer:
+            window['-TXT-'].update(f"{record.question}=")
+        else:
+            if record.correct:
+                window['-TXT-'].update(f"{record.question}≈")
+            else:
+                window['-TXT-'].update(f"{record.question}≠")
+    else:  # Number
+        window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
+        window['-PERCENT_PREVIEW_USER-'].update(visible=False)
+
+        window['-PREVIEW-'].update(record.answer, visible=True)
+
+        if record.correct:
+            window['-TXT-'].update(f"{record.question}=")
+        else:
+            window['-TXT-'].update(f"{record.question}≠")
+
+
+def popup_job_done(answer_streak, target_trial):
+    sg.popup(f"Your job is done for today, because you have answered correctly {answer_streak} times out of {target_trial}.", font=("Fira", 30), keep_on_top=True)
