@@ -3,14 +3,16 @@ from .SQL_manager import Config_template
 
 WINDOW_CLOSED = sg.WINDOW_CLOSED
 
+feedback_color = "#FFFFFF"
+
 
 # Window makers
 def make_quiz_window(config: Config_template, admin_mode):
     sg.theme('Black')
     sg.theme_button_color("white on black")
-    layout = [[sg.Push(),
+    layout = [[sg.Text("", key="-FEEDBACK-", text_color=("#000000"), visible=False), sg.Push(),
                sg.ProgressBar(100, orientation='h', size=(30, 20), visible=False, key='-PERCENT_PREVIEW_CORRECT-')],
-              [sg.Text("", key="-TXT-"), sg.Text("", visible=False, key="-PREVIEW-"),
+              [sg.Text("", key="-TXT-"), sg.Push(), sg.Text("", visible=False, key="-PREVIEW-"),
                sg.ProgressBar(100, orientation='h', size=(30, 20), visible=False, key='-PERCENT_PREVIEW_USER-'),
                sg.Input(size=(15, 1), key="-IN-", enable_events=True, visible=not config.percent),
                sg.Slider((0, 100), orientation='h', size=(15, 20), visible=config.percent, key='-PERCENT-',
@@ -125,6 +127,8 @@ def update_options(window, config: Config_template):
 
 
 def hide_preview(window, config, record):
+    hide_feedback(window)
+
     if config.percent:
         window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
         window['-PERCENT_PREVIEW_USER-'].update(visible=False)
@@ -153,28 +157,61 @@ def show_preview(window, record):
     window['-STREAK-'].update(record.points)
 
     if record.question[-1] == '%':  # Percent
-        window['-PREVIEW-'].update(f"{record.answer}%", visible=True)
-        window['-PERCENT_PREVIEW_CORRECT-'].update(record.correct_answer, visible=True)
-        window['-PERCENT_PREVIEW_USER-'].update(record.answer, visible=True)
-
         if record.correct_answer == record.answer:
             window['-TXT-'].update(f"{record.question}=")
+            show_feedback(window, "Perfect!")
         else:
             if record.correct:
                 window['-TXT-'].update(f"{record.question}≈")
+                show_feedback(window, "Good")
             else:
                 window['-TXT-'].update(f"{record.question}≠")
+                show_feedback(window, "Wrong")
+
+        window['-PREVIEW-'].update(f"{record.answer}%", visible=True)
+        window['-PERCENT_PREVIEW_CORRECT-'].update(record.correct_answer, visible=True)
+        window['-PERCENT_PREVIEW_USER-'].update(record.answer, visible=True)
     else:  # Number
+        if record.correct:
+            window['-TXT-'].update(f"{record.question}=")
+            show_feedback(window, "Good")
+        else:
+            window['-TXT-'].update(f"{record.question}≠")
+            show_feedback(window, "Wrong")
+
         window['-PERCENT_PREVIEW_CORRECT-'].update(visible=False)
         window['-PERCENT_PREVIEW_USER-'].update(visible=False)
 
         window['-PREVIEW-'].update(record.answer, visible=True)
 
-        if record.correct:
-            window['-TXT-'].update(f"{record.question}=")
-        else:
-            window['-TXT-'].update(f"{record.question}≠")
+def show_feedback(window, text):
+    global feedback_color
+    feedback_color = "#FFFFFF"
+    window['-FEEDBACK-'].update(text, visible=True, text_color=feedback_color)
+
+
+def hide_feedback(window):
+    global feedback_color
+    feedback_color = "#000000"
+    window['-FEEDBACK-'].update("", visible=False, text_color=feedback_color)
+
+
+def update_feedback_animation(window, factor):
+    if window['-FEEDBACK-'].visible:
+        global feedback_color
+
+        if feedback_color == "#000000":
+            window['-FEEDBACK-'].update(visible=False)
+            return
+
+        act_color = list(int(feedback_color[i:i + 2], 16) for i in (1, 3, 5))  # to RGB
+        act_color = list(max(0, act_color[i] - factor) for i in (0, 1, 2))  # subtract factor
+        act_color = ('#{:02X}{:02X}{:02X}').format(act_color[0], act_color[1], act_color[2])  # to Hex
+        window['-FEEDBACK-'].update(text_color=act_color)
+        feedback_color = act_color
 
 
 def popup_job_done(answer_streak, target_trial):
-    sg.popup(f"Your job is done for today, because you have answered correctly {answer_streak} times out of {target_trial}.", font=("Fira", 30), keep_on_top=True)
+    sg.popup(
+        f"Your job is done for today, because you have answered correctly {answer_streak} times out of {target_trial}.",
+        font=("Fira", 30), keep_on_top=True)
